@@ -461,6 +461,27 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
         if (!CONFIG.smartMoney.enabled) return;
         if (!canTrade()) return;
 
+        // HAVA DURUMU FILTRESI - Sadece hava durumu piyasalarini kopyala
+        const marketSlug = (trade.marketSlug || '').toLowerCase();
+        const isWeatherMarket = marketSlug.includes('temperature') ||
+          marketSlug.includes('weather') ||
+          marketSlug.includes('highest') ||
+          marketSlug.includes('lowest') ||
+          marketSlug.includes('celsius') ||
+          marketSlug.includes('london') ||
+          marketSlug.includes('hong-kong') ||
+          marketSlug.includes('paris') ||
+          marketSlug.includes('shenzhen') ||
+          marketSlug.includes('guangzhou') ||
+          marketSlug.includes('munich') ||
+          marketSlug.includes('tokyo') ||
+          marketSlug.includes('new-york');
+
+        if (!isWeatherMarket) {
+          // Hava durumu degil, atla
+          return;
+        }
+
         // ... (inside setupSmartMoney callback)
         // Add to smart money signals for dashboard
         const signal: SmartMoneySignal = {
