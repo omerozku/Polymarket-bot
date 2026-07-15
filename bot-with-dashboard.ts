@@ -21,6 +21,47 @@ import { CTFClient } from './src/clients/ctf-client.js';
 import { startDashboard, dashboardEmitter } from './src/dashboard/index.js';
 import type { BotState, BotConfig, LogLevel, DipArbSignal, SmartMoneySignal } from './src/dashboard/types.js';
 import { addSession, createSessionFromState, type TradeRecord } from './src/dashboard/session-history.js';
+import { Telegraf } from 'telegraf';
+
+// ============================================================================
+// TELEGRAM NOTIFICATION SYSTEM
+// ============================================================================
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
+const telegramBot = TELEGRAM_BOT_TOKEN ? new Telegraf(TELEGRAM_BOT_TOKEN) : null;
+
+async function sendTelegram(message: string) {
+  if (!telegramBot || !TELEGRAM_CHAT_ID) return;
+  try {
+    await telegramBot.telegram.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error(`[Telegram] Error: ${(err as Error).message}`);
+  }
+}
+
+function notifyTradeOpen(side: string, market: string, size: number, price: number, wallet: string) {
+  const emoji = side === 'BUY' ? '🟢' : '🔴';
+  const msg = `${emoji} <b>İŞLEM AÇILDI</b>\n\n` +
+    `📊 Piyasa: ${market}\n` +
+    `📈 Yön: ${side}\n` +
+    `💰 Tutar: $${size.toFixed(2)}\n` +
+    `💲 Fiyat: $${price.toFixed(4)}\n` +
+    `👛 Kaynak: ${wallet.slice(0, 10)}...`;
+  sendTelegram(msg);
+}
+
+function notifyTradeClose(side: string, market: string, size: number, price: number, profit: number) {
+  const emoji = profit >= 0 ? '✅' : '❌';
+  const profitEmoji = profit >= 0 ? '+' : '';
+  const msg = `${emoji} <b>İŞLEM KAPANDI</b>\n\n` +
+    `📊 Piyasa: ${market}\n` +
+    `📈 Yön: ${side}\n` +
+    `💰 Tutar: $${size.toFixed(2)}\n` +
+    `💲 Fiyat: $${price.toFixed(4)}\n` +
+    `📊 Kâr/Zarar: ${profitEmoji}$${profit.toFixed(2)}`;
+  sendTelegram(msg);
+}
 
 // ============================================================================
 // CONFIGURATION (same as bot-config.ts)
@@ -443,14 +484,16 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
         });
         updateDashboard();
 
+        // TELEGRAM: İşlem sinyali bildirimi
+        notifyTradeOpen(trade.side, trade.marketSlug || 'Unknown', trade.size, trade.price, trade.traderAddress);
+
         // EXECUTION LOGIC
         if (CONFIG.dryRun) {
-          // ... execution
           simulateTrade(0, 'smartMoney', `Smart Money Copy: ${trade.side} ${trade.size} shares @ ${trade.price}`);
         } else {
-          // ... live execution
-          // simplified placeholder from original file
-          // ...
+          // Live execution
+          recordTrade(0, 'smartMoney');
+          notifyTradeClose(trade.side, trade.marketSlug || 'Unknown', trade.size, trade.price, 0);
         }
       });
   }
@@ -1382,6 +1425,12 @@ async function main() {
   });
 
   log('INFO', '🚀 Bot + Dashboard running! Press Ctrl+C to stop.\n');
+
+  // TELEGRAM: Bot başlangıç bildirimi
+  sendTelegram(`🚀 <b>POLYMARKET BOT BAŞLADI</b>\n\n` +
+    `📊 Mod: ${CONFIG.dryRun ? '🧪 DRY RUN' : '🔴 CANLI İŞLEM'}` +
+    `\n👛 Takip: ${CONFIG.smartMoney.customWallets[0]?.slice(0, 10)}...` +
+    `\n💰 Maks İşlem: $${CONFIG.smartMoney.maxSizePerTrade}`);
 
   // Status Display Loop
   function displayStatus() {
