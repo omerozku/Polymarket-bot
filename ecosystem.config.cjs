@@ -10,6 +10,7 @@ module.exports = {
     restart_delay: 5000,
     env: {
       NODE_ENV: 'production',
+      LOG_LEVEL: 'warn',
     },
     error_file: './logs/err.log',
     out_file: './logs/out.log',
