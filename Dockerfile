@@ -14,6 +14,9 @@ RUN npm install
 # Copy source code
 COPY . .
 
+# Build dashboard frontend
+RUN cd dashboard && npm install && npm run build
+
 # Create logs directory
 RUN mkdir -p logs
 

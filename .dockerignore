@@ -8,5 +8,4 @@ coverage
 .cache
 *.tsbuildinfo
 dashboard/node_modules
-dashboard/dist
 poly-sdk
