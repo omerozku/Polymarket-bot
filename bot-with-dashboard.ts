@@ -22,6 +22,7 @@ import { startDashboard, dashboardEmitter } from './src/dashboard/index.js';
 import type { BotState, BotConfig, LogLevel, DipArbSignal, SmartMoneySignal } from './src/dashboard/types.js';
 import { addSession, createSessionFromState, type TradeRecord } from './src/dashboard/session-history.js';
 import { Telegraf } from 'telegraf';
+import { TradingService } from './src/services/trading-service.js';
 
 // ============================================================================
 // TELEGRAM NOTIFICATION SYSTEM
@@ -396,6 +397,7 @@ function simulateTrade(profit: number, strategy: string, description: string) {
 
 let arbService: ArbitrageService | null = null;
 let sdkInstance: PolymarketSDK | null = null;
+let tradingService: TradingService | null = null;
 let isSmartMoneyInitialized = false;
 let isSmartMoneyInitializing = false;
 
@@ -513,9 +515,52 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
         if (CONFIG.dryRun) {
           simulateTrade(0, 'smartMoney', `Smart Money Copy: ${trade.side} ${trade.size} shares @ ${trade.price}`);
         } else {
-          // Live execution
-          recordTrade(0, 'smartMoney');
-          notifyTradeClose(trade.side, trade.marketSlug || 'Unknown', trade.size, trade.price, 0);
+          // GERCEK ISLEM - TradingService ile emir ver
+          try {
+            const sdk = sdkInstance;
+            if (!sdk || !sdk.tradingService) {
+              log('ERROR', 'TradingService not initialized');
+              return;
+            }
+
+            // Token ID'yi al (trade objesinden)
+            const tokenId = trade.tokenId;
+            if (!tokenId) {
+              log('ERROR', 'No tokenId in trade signal');
+              return;
+            }
+
+            // Max $5 ile sinirlandir
+            const maxUsd = CONFIG.smartMoney.maxSizePerTrade;
+            const tradeSize = Math.min(trade.size, Math.floor(maxUsd / trade.price));
+
+            if (tradeSize < 5) {
+              log('WARN', `Trade size too small: ${tradeSize} shares (min 5)`);
+              return;
+            }
+
+            log('TRADE', `Placing order: ${trade.side} ${tradeSize} shares @ $${trade.price} on ${trade.marketSlug}`);
+
+            const result = await sdk.tradingService.createLimitOrder({
+              tokenId: tokenId,
+              side: trade.side as 'BUY' | 'SELL',
+              price: trade.price,
+              size: tradeSize,
+              orderType: 'GTC',
+            });
+
+            if (result.success) {
+              log('TRADE', `Order placed successfully! ID: ${result.orderId}`);
+              notifyTradeClose(trade.side, trade.marketSlug || 'Unknown', tradeSize, trade.price, 0);
+              recordTrade(0, 'smartMoney');
+            } else {
+              log('ERROR', `Order failed: ${result.errorMsg}`);
+              sendTelegram(`❌ <b>İŞLEM BAŞARISIZ</b>\n\nHata: ${result.errorMsg}`);
+            }
+          } catch (err) {
+            log('ERROR', `Trade execution error: ${(err as Error).message}`);
+            sendTelegram(`❌ <b>İŞLEM HATASI</b>\n\n${(err as Error).message}`);
+          }
         }
       });
   }
