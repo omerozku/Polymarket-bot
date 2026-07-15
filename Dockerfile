@@ -8,8 +8,11 @@ RUN npm install -g pm2
 # Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (tsx is in devDependencies but needed at runtime)
+# Install ALL dependencies
 RUN npm install
+
+# Force install telegraf (may not be in lock file)
+RUN npm install telegraf
 
 # Copy source code
 COPY . .
