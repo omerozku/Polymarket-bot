@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.mimocode
+logs
+*.log
+coverage
+.cache
+*.tsbuildinfo
+dashboard/node_modules
+dashboard/dist
+poly-sdk

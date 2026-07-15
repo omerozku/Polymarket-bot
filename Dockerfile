@@ -8,14 +8,14 @@ RUN npm install -g pm2
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install ALL dependencies (tsx is in devDependencies but needed at runtime)
 RUN npm install
 
 # Copy source code
 COPY . .
 
-# Build TypeScript
-RUN npx tsc || true
+# Create logs directory
+RUN mkdir -p logs
 
 # Expose dashboard port
 EXPOSE 3001
