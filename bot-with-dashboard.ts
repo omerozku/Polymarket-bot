@@ -119,6 +119,7 @@ let CONFIG = {
     minTradeSize: 1,
     delay: 500,
     customWallets: [
+      '0xdadbf9e1df1b8d7a184a0d6ab9c83b2337b61870',
       '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',
     ] as string[],
   },
