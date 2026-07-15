@@ -7,9 +7,10 @@ interface WebSocketMessage {
 }
 
 // Connect to same host:port when served by bot, or port 3001 for dev
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss' : 'ws';
 const WS_URL = window.location.port === '5173'
   ? `ws://${window.location.hostname}:3001`
-  : `ws://${window.location.host}`;
+  : `${WS_PROTOCOL}://${window.location.host}`;
 const MAX_LOGS = 200;
 
 export function useWebSocket() {
