@@ -62,26 +62,23 @@ let CONFIG = {
 
   smartMoney: {
     enabled: process.env.SMARTMONEY_ENABLED !== 'false',
-    topN: 20,
-    // 🔴 FIXED: Stricter criteria (v3.1)
-    minWinRate: 0.60,  // Up from 0.70 to match bot-config (60%+)
-    minPnl: 500,       // Up from 70 to $500
-    minTrades: 30,     // Up from 15 to 30
+    topN: 0,  // Leaderboard izlemeyi kapat - sadece custom wallet takip et
+    minWinRate: 0.60,
+    minPnl: 500,
+    minTrades: 30,
 
-    // 🔴 NEW: Quality filters
-    minProfitFactor: 1.5,  // Total wins / total losses >= 1.5x
-    minConsistencyScore: 0.7,  // Recent performance score
-    maxSingleTradeExposure: 0.3,  // Max 30% of PnL from one trade
-    checkLastNTrades: 10,  // Analyze last 10 trades
+    minProfitFactor: 1.5,
+    minConsistencyScore: 0.7,
+    maxSingleTradeExposure: 0.3,
+    checkLastNTrades: 10,
 
     sizeScale: 0.1,
-    maxSizePerTrade: 15,  // Up from 10
+    maxSizePerTrade: 5,  // Maksimum $5 islem
     maxSlippage: 0.03,
-    minTradeSize: 10,  // Up from 5
+    minTradeSize: 1,
     delay: 500,
     customWallets: [
-      '0xc2e7800b5af46e6093872b177b7a5e7f0563be51',
-      '0x58c3f5d66c95d4c41b093fbdd2520e46b6c9de74',
+      '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',
     ] as string[],
   },
 
@@ -356,6 +353,7 @@ function simulateTrade(profit: number, strategy: string, description: string) {
 // ============================================================================
 
 let arbService: ArbitrageService | null = null;
+let sdkInstance: PolymarketSDK | null = null;
 let isSmartMoneyInitialized = false;
 let isSmartMoneyInitializing = false;
 
@@ -688,16 +686,20 @@ async function setupDipArb(sdk: PolymarketSDK) {
 let swapService: SwapService | null = null;
 
 async function updateBalances() {
+  if (sdkInstance) {
+    try {
+      const result = await sdkInstance.tradingService.getBalanceAllowance('COLLATERAL');
+      const val = parseFloat(result.balance) / 1e6;
+      state.usdcBalance = val;
+      updateDashboard();
+    } catch (err) {
+      log('WARN', `CLOB balance: ${(err as Error).message}`);
+    }
+  }
+
   if (CONFIG.dryRun) {
-    // SIMULATION: Mock balances
-    // Base 10,000 + whatever PnL we've made in this session
     state.usdcEBalance = 10000 + state.totalPnL;
     state.maticBalance = 100;
-
-    // Only verify once/log sparsely
-    if (Math.random() < 0.05) { // Occasional log
-      // no-op
-    }
     updateDashboard();
     return;
   }
@@ -707,7 +709,6 @@ async function updateBalances() {
     const balances = await swapService.getBalances();
     let changed = false;
 
-    // Parse balances from TokenBalance array
     for (const b of balances) {
       if (b.symbol === 'MATIC') {
         const val = parseFloat(b.balance);
@@ -723,14 +724,8 @@ async function updateBalances() {
       }
     }
 
-    if (changed) {
-      updateDashboard();
-      // Optional: Log only on significant changes or debug
-      // log('SWAP', 'Balances updated');
-    }
-  } catch (err) {
-    // Silent fail on interval to avoid log spam
-  }
+    if (changed) updateDashboard();
+  } catch { /* silent */ }
 }
 
 async function setupSwap() {
@@ -1131,6 +1126,10 @@ async function main() {
   });
 
   log('INFO', `Wallet: ${sdk.tradingService.getAddress()}`);
+  sdkInstance = sdk;
+
+  // CLOB balance first (independent of RPC/swap setup)
+  await updateBalances();
 
   // Setup all services
   await setupOnchain(); // MUST BE FIRST (Approvals)
@@ -1144,6 +1143,9 @@ async function main() {
   setInterval(() => {
     updateDashboard();
   }, 5000);
+
+  // Periodic CLOB balance refresh (independent of setupSwap)
+  setInterval(updateBalances, 30000);
 
   // Setup Direct Trading
   await setupDirectTrading(sdk);
