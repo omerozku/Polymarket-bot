@@ -39,7 +39,9 @@ import type { UnifiedCache } from '../core/unified-cache.js';
 import { PolymarketError } from '../core/errors.js';
 
 /** Gamma API base URL */
-const GAMMA_API_BASE = 'https://gamma-api.polymarket.com';
+const GAMMA_API_BASE = process.env.RENDER_PROXY_URL 
+  ? `${process.env.RENDER_PROXY_URL.replace(/\/$/, '')}/gamma`
+  : 'https://gamma-api.polymarket.com';
 
 // ===== Types =====
 

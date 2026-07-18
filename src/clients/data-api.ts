@@ -8,7 +8,9 @@ import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError } from '../core/errors.js';
 
-const DATA_API_BASE = 'https://data-api.polymarket.com';
+const DATA_API_BASE = process.env.RENDER_PROXY_URL
+  ? `${process.env.RENDER_PROXY_URL.replace(/\/$/, '')}/data`
+  : 'https://data-api.polymarket.com';
 
 // ===== Types =====
 

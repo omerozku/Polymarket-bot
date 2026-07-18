@@ -13,5 +13,15 @@ console.info = (...args) => { if (threshold >= 2) origInfo(...args); };
 console.warn = (...args) => { if (threshold >= 1) origWarn(...args); };
 console.error = (...args) => { if (threshold >= 0) origError(...args); };
 
+// Proxy desteği - HTTP_PROXY veya HTTPS_PROXY ortam değişkeni varsa kullan
+if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY) {
+  try {
+    require('global-agent/bootstrap');
+    console.log('[Proxy] Global agent bootstrap loaded');
+  } catch (e) {
+    console.log('[Proxy] global-agent not available, running without proxy');
+  }
+}
+
 require('tsx/cjs');
 require('./bot-with-dashboard.ts');

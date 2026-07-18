@@ -44,5 +44,9 @@ services:
         value: "0xA00eed21f51b2f01E7be6b06e871143BA4B87B09"
       - key: SIGNATURE_TYPE
         value: "3"
+      - key: HTTP_PROXY
+        sync: false
+      - key: HTTPS_PROXY
+        sync: false
     healthCheckPath: /
     autoDeploy: true

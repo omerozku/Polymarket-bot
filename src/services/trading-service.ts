@@ -32,7 +32,9 @@ export const POLYGON_MAINNET = 137;
 export const POLYGON_AMOY = 80002;
 
 // CLOB Host
-const CLOB_HOST = 'https://clob.polymarket.com';
+const CLOB_HOST = process.env.RENDER_PROXY_URL
+  ? `${process.env.RENDER_PROXY_URL.replace(/\/$/, '')}/clob`
+  : 'https://clob.polymarket.com';
 
 // ============================================================================
 // Polymarket Order Minimums
