@@ -108,8 +108,9 @@ const CONFIG = {
     maxSlippage: 0.05,
     minTradeSize: 0.5,
     delay: 100,  // Mümkün olduğunca hızlı kopyalamak için düşük gecikme
-    // 🔴 TAKIP EDILECEK TEK CÜZDAN:
+    // 🔴 TAKIP EDILECEK CÜZDANLAR:
     customWallets: [
+      '0xa0161e41',  // En aktif hava durumu trader - 7+ sehir, sistematik
       '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',  // Avrupa sicaklik trader
     ] as string[],
   },

@@ -158,7 +158,8 @@ let CONFIG = {
     minTradeSize: 1,
     delay: 100,  // Hizli kopyalama icin dusuk gecikme
     customWallets: [
-      '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',  // Avrupa sicaklik trader - disiplinli strateji
+      '0xa0161e41',  // En aktif hava durumu trader - 7+ sehir, sistematik
+      '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',  // Avrupa sicaklik trader
     ] as string[],
   },
 
