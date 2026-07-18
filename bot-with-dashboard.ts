@@ -162,13 +162,15 @@ let CONFIG = {
     ] as string[],
   },
 
-  // Erken cikis stratejisi - kopyalanan pozisyonlarda kendi cikis kurallarimiz
+  // Erken cikis stratejisi - kucuk butce, istikrarli kar odakli
   earlyExit: {
     enabled: true,
-    profitTarget1: 1.50,   // %150 karda %50 sat
-    profitTarget2: 3.00,   // %300 karda kalanini sat
+    profitTarget1: 0.20,   // +%20 karda yarisini sat (hizli kar kilitle)
+    profitTarget2: 0.50,   // +%50 karda kalanini sat
     sellAtTarget1: 0.50,   // Target1'de pozisyonun %50'sini sat
-    checkIntervalMs: 15000, // Her 15 saniyede kontrol et
+    stopLossPct: 0.30,     // -%30 zararda cik (sermaye koruma)
+    maxHoldMinutes: 360,   // Maksimum 6 saat bekle (hava marketleri kisa omurlu)
+    checkIntervalMs: 10000, // Her 10 saniyede kontrol et (daha hassas)
   },
 
   arbitrage: {
@@ -801,20 +803,35 @@ async function setupEarlyExitMonitor(sdk: PolymarketSDK) {
 
         const entryPrice = tracker.entryPrice;
         const pnlPct = (currentPrice - entryPrice) / entryPrice;
+        const holdMinutes = (Date.now() - tracker.entryTime) / 60000;
 
-        // Hedef 1: %30 karda yarisini sat (ilk satilmadiysa)
+        // STOP-LOSS: -%30 zararda hepsini sat (sermaye koruma)
+        if (pnlPct <= -CONFIG.earlyExit.stopLossPct && tracker.remainingSize > 0) {
+          log('EXIT', `🛑 STOP-LOSS (${(CONFIG.earlyExit.stopLossPct * 100)}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (${(pnlPct * 100).toFixed(1)}%)`);
+          await executeEarlyExit(tokenId, tracker.remainingSize, currentPrice, tracker);
+          continue; // Bu pozisyonda devam etme
+        }
+
+        // ZAMAN LIMITI: Maksimum bekleme suresi dolduysa cik
+        if (holdMinutes >= CONFIG.earlyExit.maxHoldMinutes && tracker.remainingSize > 0) {
+          log('EXIT', `⏰ ZAMAN LIMIDI (${CONFIG.earlyExit.maxHoldMinutes}dk): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (${(pnlPct * 100).toFixed(1)}%)`);
+          await executeEarlyExit(tokenId, tracker.remainingSize, currentPrice, tracker);
+          continue;
+        }
+
+        // HEDEF 1: +%20 karda yarisini sat (ilk satilmadiysa)
         if (!tracker.firstSellDone && pnlPct >= CONFIG.earlyExit.profitTarget1 && tracker.remainingSize > 0) {
           const sellAmount = Math.floor(tracker.remainingSize * CONFIG.earlyExit.sellAtTarget1);
           if (sellAmount >= 5) { // Polymarket minimum 5 hisse
-            log('EXIT', `🎯 HEDEF 1 (${CONFIG.earlyExit.profitTarget1 * 100}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (+${(pnlPct * 100).toFixed(1)}%)`);
+            log('EXIT', `🎯 HEDEF 1 (+${(CONFIG.earlyExit.profitTarget1 * 100)}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (+${(pnlPct * 100).toFixed(1)}%)`);
             await executeEarlyExit(tokenId, sellAmount, currentPrice, tracker);
             tracker.firstSellDone = true;
           }
         }
 
-        // Hedef 2: %50 karda kalanini sat (Hedef 1'den sonra)
+        // HEDEF 2: +%50 karda kalanini sat (Hedef 1'den sonra)
         if (tracker.firstSellDone && pnlPct >= CONFIG.earlyExit.profitTarget2 && tracker.remainingSize > 0) {
-          log('EXIT', `🎯 HEDEF 2 (${CONFIG.earlyExit.profitTarget2 * 100}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (+${(pnlPct * 100).toFixed(1)}%)`);
+          log('EXIT', `🎯 HEDEF 2 (+${(CONFIG.earlyExit.profitTarget2 * 100)}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (+${(pnlPct * 100).toFixed(1)}%)`);
           await executeEarlyExit(tokenId, tracker.remainingSize, currentPrice, tracker);
         }
 
