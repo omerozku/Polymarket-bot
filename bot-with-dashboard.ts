@@ -706,7 +706,8 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
 
             if (result.success) {
               log('TRADE', `Order placed successfully! ID: ${result.orderId}`);
-              sendTelegram(`✅ <b>İŞLEM AÇILDI</b>\n\n📊 Market: ${trade.marketSlug}\n📈 Yön: BUY\n💰 Hisse: ${tradeSize}\n💲 Fiyat: $${trade.price}\n💵 Değer: $${orderValue.toFixed(2)}\n🎯 Erken çıkış aktif: %30/%50 kademeli`);
+              // ponytail: telegram trade-open notification disabled
+              // sendTelegram(`✅ <b>İŞLEM AÇILDI</b>\n\n📊 Market: ${trade.marketSlug}\n📈 Yön: BUY\n💰 Hisse: ${tradeSize}\n💲 Fiyat: $${trade.price}\n💵 Değer: $${orderValue.toFixed(2)}\n🎯 Erken çıkış aktif: %30/%50 kademeli`);
               recordTrade(0, 'smartMoney');
 
               // Early exit tracker'a kaydet
