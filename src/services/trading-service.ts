@@ -206,12 +206,27 @@ export class TradingService {
 
     // Derive or create API credentials
     if (!this.credentials) {
-      const creds = await bootstrap.createOrDeriveApiKey();
-      this.credentials = {
-        key: creds.key,
-        secret: creds.secret,
-        passphrase: creds.passphrase,
-      };
+      // Önce environment variable'lardan kontrol et
+      const envKey = process.env.RELAYER_API_KEY;
+      const envSecret = process.env.RELAYER_API_KEY_SECRET;
+      const envPassphrase = process.env.RELAYER_API_KEY_PASSPHRASE;
+
+      if (envKey && envSecret && envPassphrase) {
+        this.credentials = {
+          key: envKey,
+          secret: envSecret,
+          passphrase: envPassphrase,
+        };
+        console.log('[TradingService] API credentials loaded from environment variables');
+      } else {
+        // Yoksa API'den oluştur
+        const creds = await bootstrap.createOrDeriveApiKey();
+        this.credentials = {
+          key: creds.key,
+          secret: creds.secret,
+          passphrase: creds.passphrase,
+        };
+      }
     }
 
     // Create full client with L2 auth + deposit wallet
