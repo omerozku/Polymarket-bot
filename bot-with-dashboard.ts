@@ -32,13 +32,51 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
 const telegramBot = TELEGRAM_BOT_TOKEN ? new Telegraf(TELEGRAM_BOT_TOKEN) : null;
 
-async function sendTelegram(message: string) {
-  if (!telegramBot || !TELEGRAM_CHAT_ID) return;
-  try {
-    await telegramBot.telegram.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
-  } catch (err) {
-    console.error(`[Telegram] Error: ${(err as Error).message}`);
+// Telegram rate limiting: en az 3 saniye aralıkla mesaj gönder
+let lastTelegramTime = 0;
+const TELEGRAM_COOLDOWN_MS = 3000;
+const telegramQueue: Array<{ message: string; resolve: () => void }> = [];
+let telegramProcessing = false;
+
+async function processTelegramQueue() {
+  if (telegramProcessing || telegramQueue.length === 0) return;
+  telegramProcessing = true;
+
+  while (telegramQueue.length > 0) {
+    const now = Date.now();
+    const wait = TELEGRAM_COOLDOWN_MS - (now - lastTelegramTime);
+    if (wait > 0) {
+      await new Promise(r => setTimeout(r, wait));
+    }
+
+    const item = telegramQueue.shift()!;
+    if (telegramBot && TELEGRAM_CHAT_ID) {
+      try {
+        await telegramBot.telegram.sendMessage(TELEGRAM_CHAT_ID, item.message, { parse_mode: 'HTML' });
+        lastTelegramTime = Date.now();
+      } catch (err) {
+        const errMsg = (err as Error).message;
+        if (errMsg.includes('429')) {
+          // Rate limited - bekle ve tekrar dene
+          const retryAfter = parseInt(errMsg.match(/retry after (\d+)/)?.[1] || '5') * 1000;
+          await new Promise(r => setTimeout(r, retryAfter));
+          telegramQueue.unshift(item); // Başa ekle
+        } else {
+          console.error(`[Telegram] Error: ${errMsg}`);
+        }
+      }
+    }
+    item.resolve();
   }
+  telegramProcessing = false;
+}
+
+function sendTelegram(message: string) {
+  if (!telegramBot || !TELEGRAM_CHAT_ID) return;
+  return new Promise<void>(resolve => {
+    telegramQueue.push({ message, resolve });
+    processTelegramQueue();
+  });
 }
 
 function notifyTradeOpen(side: string, market: string, size: number, price: number, wallet: string) {
@@ -74,7 +112,7 @@ let CONFIG = {
     maxPerTradePct: 0.02,  // 🔴 FIXED: Reduced from 3% to 2%
     maxPerMarketPct: 0.10,
     maxTotalExposurePct: 0.30,
-    minOrderUsd: 5,
+    minOrderUsd: 1,
     strategyAllocation: {
       smartMoney: 0.60,
       arbitrage: 0.20,
@@ -115,14 +153,22 @@ let CONFIG = {
     checkLastNTrades: 10,
 
     sizeScale: 0.1,
-    maxSizePerTrade: 5,  // Maksimum $5 islem
-    maxSlippage: 0.03,
+    maxSizePerTrade: 5,  // Fee buffer ile guvenli max
+    maxSlippage: 0.05,
     minTradeSize: 1,
-    delay: 500,
+    delay: 100,  // Hizli kopyalama icin dusuk gecikme
     customWallets: [
-      '0xdadbf9e1df1b8d7a184a0d6ab9c83b2337b61870',
-      '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',
+      '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',  // Avrupa sicaklik trader - disiplinli strateji
     ] as string[],
+  },
+
+  // Erken cikis stratejisi - kopyalanan pozisyonlarda kendi cikis kurallarimiz
+  earlyExit: {
+    enabled: true,
+    profitTarget1: 1.50,   // %150 karda %50 sat
+    profitTarget2: 3.00,   // %300 karda kalanini sat
+    sellAtTarget1: 0.50,   // Target1'de pozisyonun %50'sini sat
+    checkIntervalMs: 15000, // Her 15 saniyede kontrol et
   },
 
   arbitrage: {
@@ -245,6 +291,16 @@ const state: BotState = {
   },
 
   smartMoneySignals: [],
+
+  // Early exit tracker - kopyalanan pozisyonlar icin cikis takibi
+  earlyExitTracker: new Map<string, {
+    entryPrice: number;
+    entrySize: number;
+    remainingSize: number;
+    firstSellDone: boolean;
+    marketSlug: string;
+    entryTime: number;
+  }>(),
 };
 
 // ============================================================================
@@ -401,6 +457,11 @@ let tradingService: TradingService | null = null;
 let isSmartMoneyInitialized = false;
 let isSmartMoneyInitializing = false;
 
+// Throttle: en fazla 3 saniyede bir işlem aç
+const TRADE_COOLDOWN_MS = 3000;
+let lastTradeTime = 0;
+let pendingTrade = false;
+
 async function setupSmartMoney(sdk: PolymarketSDK) {
   if (CONFIG.smartMoney.enabled) {
     initializeSmartMoney(sdk);
@@ -470,6 +531,7 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
           marketSlug.includes('highest') ||
           marketSlug.includes('lowest') ||
           marketSlug.includes('celsius') ||
+          marketSlug.includes('fahrenhe') ||
           marketSlug.includes('london') ||
           marketSlug.includes('hong-kong') ||
           marketSlug.includes('paris') ||
@@ -477,11 +539,42 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
           marketSlug.includes('guangzhou') ||
           marketSlug.includes('munich') ||
           marketSlug.includes('tokyo') ||
-          marketSlug.includes('new-york');
+          marketSlug.includes('new-york') ||
+          marketSlug.includes('amsterdam') ||
+          marketSlug.includes('chicago') ||
+          marketSlug.includes('madrid') ||
+          marketSlug.includes('taipei');
 
         if (!isWeatherMarket) {
           // Hava durumu degil, atla
           return;
+        }
+
+        // Sadece ucuz alimlari kopyala ($0.20 altinda) - hedge bahislerini atla
+        if (trade.side === 'BUY' && trade.price > 0.20) {
+          log('WARN', `Pahali alim atlandi: $${trade.price.toFixed(2)} - ${trade.marketSlug}`);
+          return;
+        }
+
+        // GECMIS PIYASALARI FILTRELE - sadece gelecekteki piyasalar
+        const dateMatch = marketSlug.match(/on-(\w+)-(\d+)-(\d{4})/);
+        if (dateMatch) {
+          const monthMap: Record<string, number> = {
+            'january': 0, 'february': 1, 'march': 2, 'april': 3,
+            'may': 4, 'june': 5, 'july': 6, 'august': 7,
+            'september': 8, 'october': 9, 'november': 10, 'december': 11,
+          };
+          const month = monthMap[dateMatch[1].toLowerCase()];
+          const day = parseInt(dateMatch[2]);
+          const year = parseInt(dateMatch[3]);
+
+          if (month !== undefined) {
+            const marketDate = new Date(year, month, day, 23, 59, 59);
+            if (marketDate < new Date()) {
+              log('WARN', `Gecmis piyasa atlandi: ${trade.marketSlug}`);
+              return;
+            }
+          }
         }
 
         // ... (inside setupSmartMoney callback)
@@ -508,18 +601,38 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
         });
         updateDashboard();
 
-        // TELEGRAM: İşlem sinyali bildirimi
-        notifyTradeOpen(trade.side, trade.marketSlug || 'Unknown', trade.size, trade.price, trade.traderAddress);
-
         // EXECUTION LOGIC
         if (CONFIG.dryRun) {
           simulateTrade(0, 'smartMoney', `Smart Money Copy: ${trade.side} ${trade.size} shares @ ${trade.price}`);
         } else {
-          // GERCEK ISLEM - TradingService ile emir ver
+          // GERCEK ISLEM - Throttle ile
+          // HEMEN kilitle (race condition engeli)
+          if (pendingTrade) {
+            log('WARN', `Pending trade var, atlanıyor`);
+            return;
+          }
+          pendingTrade = true;
+
           try {
             const sdk = sdkInstance;
             if (!sdk || !sdk.tradingService) {
               log('ERROR', 'TradingService not initialized');
+              pendingTrade = false;
+              return;
+            }
+
+            // THROTTLE: son işlemden beri 3 saniye geçti mi?
+            const now = Date.now();
+            if ((now - lastTradeTime) < TRADE_COOLDOWN_MS) {
+              log('WARN', `Throttled - son işlemden beri ${(now - lastTradeTime)}ms geçti (min ${TRADE_COOLDOWN_MS}ms)`);
+              pendingTrade = false;
+              return;
+            }
+
+            // SELL sinyali - ERKEN CIKIS STRATEJISI: kendi cikis kurallarimizi kullaniyoruz
+            if (trade.side === 'SELL') {
+              log('SIGNAL', `SELL sinyali atlandi (erken cikis stratejisi aktif): ${trade.marketSlug}`);
+              pendingTrade = false;
               return;
             }
 
@@ -527,39 +640,104 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
             const tokenId = trade.tokenId;
             if (!tokenId) {
               log('ERROR', 'No tokenId in trade signal');
+              pendingTrade = false;
               return;
             }
 
-            // Max $5 ile sinirlandir
-            const maxUsd = CONFIG.smartMoney.maxSizePerTrade;
-            const tradeSize = Math.min(trade.size, Math.floor(maxUsd / trade.price));
+            // Fiyat kontrolü
+            if (!trade.price || trade.price <= 0 || trade.price >= 1) {
+              log('WARN', `Invalid price: ${trade.price}`);
+              pendingTrade = false;
+              return;
+            }
 
+            // Bakiye kontrolü
+            let balance = 0;
+            try {
+              const balResult = await sdk.tradingService.getBalanceAllowance('COLLATERAL');
+              balance = parseFloat(balResult.balance) / 1e6;
+              state.usdcBalance = balance;
+            } catch {
+              log('WARN', 'Balance check failed, proceeding anyway');
+            }
+
+            const maxUsd = CONFIG.smartMoney.maxSizePerTrade; // 10
+            // ponytail: ~2% fee buffer — Polymarket taker fee
+            const effectiveUsd = Math.min(balance > 0 ? balance * 0.96 : maxUsd, maxUsd);
+            if (balance > 0 && balance < CONFIG.minOrderUsd) {
+              log('WARN', `Yetersiz bakiye: $${balance.toFixed(2)} (min: $${CONFIG.minOrderUsd})`);
+              pendingTrade = false;
+              return;
+            }
+
+            // Hisseleri hesapla: effectiveUsd / fiyat = kaç hisse alınır
+            // Polymarket minimum 5 hisse gerektirir
+            let tradeSize = Math.floor(effectiveUsd / trade.price);
             if (tradeSize < 5) {
-              log('WARN', `Trade size too small: ${tradeSize} shares (min 5)`);
+              log('WARN', `Trade size too small: ${tradeSize} shares (min 5). Price: $${trade.price}`);
+              pendingTrade = false;
               return;
             }
 
-            log('TRADE', `Placing order: ${trade.side} ${tradeSize} shares @ $${trade.price} on ${trade.marketSlug}`);
+            // Emir değerini kontrol et (min $1)
+            const orderValue = tradeSize * trade.price;
+            if (orderValue < 1) {
+              log('WARN', `Order value too small: $${orderValue.toFixed(2)} (min $1)`);
+              pendingTrade = false;
+              return;
+            }
+
+            lastTradeTime = Date.now();
+
+            log('TRADE', `Placing order: BUY ${tradeSize} shares @ $${trade.price} on ${trade.marketSlug} (value: $${orderValue.toFixed(2)})`);
 
             const result = await sdk.tradingService.createLimitOrder({
               tokenId: tokenId,
-              side: trade.side as 'BUY' | 'SELL',
+              side: 'BUY',
               price: trade.price,
               size: tradeSize,
               orderType: 'GTC',
             });
 
+            pendingTrade = false;
+
             if (result.success) {
               log('TRADE', `Order placed successfully! ID: ${result.orderId}`);
-              notifyTradeClose(trade.side, trade.marketSlug || 'Unknown', tradeSize, trade.price, 0);
+              sendTelegram(`✅ <b>İŞLEM AÇILDI</b>\n\n📊 Market: ${trade.marketSlug}\n📈 Yön: BUY\n💰 Hisse: ${tradeSize}\n💲 Fiyat: $${trade.price}\n💵 Değer: $${orderValue.toFixed(2)}\n🎯 Erken çıkış aktif: %30/%50 kademeli`);
               recordTrade(0, 'smartMoney');
+
+              // Early exit tracker'a kaydet
+              if (CONFIG.earlyExit.enabled) {
+                const existing = state.earlyExitTracker.get(tokenId);
+                if (existing) {
+                  // Ayni token'a daha once girildiyse, ortala
+                  const totalSize = existing.remainingSize + tradeSize;
+                  const avgPrice = ((existing.entryPrice * existing.remainingSize) + (trade.price * tradeSize)) / totalSize;
+                  existing.entryPrice = avgPrice;
+                  existing.remainingSize = totalSize;
+                  existing.entrySize = totalSize;
+                } else {
+                  state.earlyExitTracker.set(tokenId, {
+                    entryPrice: trade.price,
+                    entrySize: tradeSize,
+                    remainingSize: tradeSize,
+                    firstSellDone: false,
+                    marketSlug: trade.marketSlug || 'unknown',
+                    entryTime: Date.now(),
+                  });
+                }
+                log('EXIT', `Tracker'a eklendi: ${trade.marketSlug} @ $${trade.price} (${tradeSize} hisse)`);
+              }
             } else {
-              log('ERROR', `Order failed: ${result.errorMsg}`);
-              sendTelegram(`❌ <b>İŞLEM BAŞARISIZ</b>\n\nHata: ${result.errorMsg}`);
+              const errMsg = result.errorMsg || 'Bilinmeyen hata';
+              log('ERROR', `Order failed: ${errMsg}`);
+              sendTelegram(`❌ <b>İŞLEM BAŞARISIZ</b>\n\nMarket: ${trade.marketSlug}\nHata: ${errMsg}`);
             }
           } catch (err) {
             log('ERROR', `Trade execution error: ${(err as Error).message}`);
             sendTelegram(`❌ <b>İŞLEM HATASI</b>\n\n${(err as Error).message}`);
+          } finally {
+            pendingTrade = false;
           }
         }
       });
@@ -568,6 +746,151 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
   isSmartMoneyInitializing = false;
 }
 
+
+// ============================================================================
+// EARLY EXIT MONITOR - Kopyalanan pozisyonlarda kademeli cikis
+// ============================================================================
+
+async function setupEarlyExitMonitor(sdk: PolymarketSDK) {
+  if (!CONFIG.earlyExit.enabled) return;
+
+  log('EXIT', `Erken cikis monitoru baslatildi (kontrol: ${CONFIG.earlyExit.checkIntervalMs / 1000}s)`);
+  log('EXIT', `Kurallar: +%${CONFIG.earlyExit.profitTarget1 * 100} -> %${CONFIG.earlyExit.sellAtTarget1 * 100} sat | +%${CONFIG.earlyExit.profitTarget2 * 100} -> kalanini sat`);
+
+  const checkEarlyExits = async () => {
+    if (!CONFIG.earlyExit.enabled) return;
+
+    // Tracker'da olmayan hava durumu pozisyonlarini otomatik ekle
+    for (const pos of state.positions) {
+      const tokenId = pos.asset;
+      if (!tokenId || state.earlyExitTracker.has(tokenId)) continue;
+
+      const slug = (pos.slug || pos.title || pos.marketSlug || '').toLowerCase();
+      const isWeather = slug.includes('temperature') || slug.includes('weather') ||
+        slug.includes('highest') || slug.includes('lowest') || slug.includes('celsius') ||
+        slug.includes('fahrenhe');
+      if (!isWeather) continue;
+
+      const entryPrice = Number(pos.avgPrice) || 0;
+      const size = Number(pos.size) || 0;
+      if (entryPrice <= 0 || size <= 0) continue;
+
+      state.earlyExitTracker.set(tokenId, {
+        entryPrice,
+        entrySize: size,
+        remainingSize: size,
+        firstSellDone: false,
+        marketSlug: slug,
+        entryTime: Date.now(),
+      });
+      log('EXIT', `Mevcut pozisyon tracker'a eklendi: ${slug} @ $${entryPrice.toFixed(3)} (${size} hisse)`);
+    }
+
+    for (const [tokenId, tracker] of Array.from(state.earlyExitTracker.entries())) {
+      try {
+        // Mevcut fiyati bul (state.positions zaten zenginlestirilmis)
+        const position = state.positions.find((p: any) => p.asset === tokenId);
+        if (!position) {
+          // Pozisyon artik yok (satis yapildi veya resolve oldu) -> tracker'dan sil
+          state.earlyExitTracker.delete(tokenId);
+          continue;
+        }
+
+        const currentPrice = Number((position as any).curPrice) || Number(position.msg_price) || 0;
+        if (currentPrice <= 0) continue;
+
+        const entryPrice = tracker.entryPrice;
+        const pnlPct = (currentPrice - entryPrice) / entryPrice;
+
+        // Hedef 1: %30 karda yarisini sat (ilk satilmadiysa)
+        if (!tracker.firstSellDone && pnlPct >= CONFIG.earlyExit.profitTarget1 && tracker.remainingSize > 0) {
+          const sellAmount = Math.floor(tracker.remainingSize * CONFIG.earlyExit.sellAtTarget1);
+          if (sellAmount >= 5) { // Polymarket minimum 5 hisse
+            log('EXIT', `🎯 HEDEF 1 (${CONFIG.earlyExit.profitTarget1 * 100}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (+${(pnlPct * 100).toFixed(1)}%)`);
+            await executeEarlyExit(tokenId, sellAmount, currentPrice, tracker);
+            tracker.firstSellDone = true;
+          }
+        }
+
+        // Hedef 2: %50 karda kalanini sat (Hedef 1'den sonra)
+        if (tracker.firstSellDone && pnlPct >= CONFIG.earlyExit.profitTarget2 && tracker.remainingSize > 0) {
+          log('EXIT', `🎯 HEDEF 2 (${CONFIG.earlyExit.profitTarget2 * 100}%): ${tracker.marketSlug} | Giris: $${entryPrice.toFixed(3)} -> Simdi: $${currentPrice.toFixed(3)} (+${(pnlPct * 100).toFixed(1)}%)`);
+          await executeEarlyExit(tokenId, tracker.remainingSize, currentPrice, tracker);
+        }
+
+      } catch (err) {
+        log('EXIT', `Monitor hatasi (${tracker.marketSlug}): ${(err as Error).message}`);
+      }
+    }
+  };
+
+  // Periyodik kontrol
+  setInterval(checkEarlyExits, CONFIG.earlyExit.checkIntervalMs);
+  // İlk kontrol 20sn sonra (pozisyonlar sync edilsin)
+  setTimeout(checkEarlyExits, 20000);
+}
+
+async function executeEarlyExit(
+  tokenId: string,
+  sellSize: number,
+  currentPrice: number,
+  tracker: { entryPrice: number; entrySize: number; remainingSize: number; firstSellDone: boolean; marketSlug: string; entryTime: number }
+) {
+  try {
+    if (CONFIG.dryRun) {
+      log('EXIT', `[DRY RUN] Satilacak: ${sellSize} hisse @ $${currentPrice.toFixed(3)} (${tracker.marketSlug})`);
+      tracker.remainingSize -= sellSize;
+      if (tracker.remainingSize <= 0) {
+        state.earlyExitTracker.delete(tokenId);
+      }
+      return;
+    }
+
+    const sdk = sdkInstance;
+    if (!sdk?.tradingService) {
+      log('EXIT', `TradingService hazir degil, satilamadi: ${tracker.marketSlug}`);
+      return;
+    }
+
+    // Throttle kontrol
+    if (pendingTrade) {
+      log('EXIT', `Pending trade var, beklenecek: ${tracker.marketSlug}`);
+      return;
+    }
+    pendingTrade = true;
+
+    try {
+      const result = await sdk.tradingService.createMarketOrder({
+        tokenId,
+        side: 'SELL',
+        amount: sellSize,
+      });
+
+      if (result.success) {
+        const pnl = (currentPrice - tracker.entryPrice) * sellSize;
+        const pnlEmoji = pnl >= 0 ? '✅' : '❌';
+        log('EXIT', `${pnlEmoji} ERKEN CIKIS: ${sellSize} hisse @ $${currentPrice.toFixed(3)} | K/Z: $${pnl.toFixed(2)} | ${tracker.marketSlug}`);
+        sendTelegram(`${pnlEmoji} <b>ERKEN ÇIKIŞ</b>\n\n📊 Market: ${tracker.marketSlug}\n💰 Hisse: ${sellSize}\n💲 Fiyat: $${currentPrice.toFixed(3)}\n📈 Giriş: $${tracker.entryPrice.toFixed(3)}\n💵 K/Z: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
+
+        tracker.remainingSize -= sellSize;
+        if (tracker.remainingSize <= 0) {
+          state.earlyExitTracker.delete(tokenId);
+          log('EXIT', `Pozisyon tamamen kapatildi: ${tracker.marketSlug}`);
+        } else {
+          log('EXIT', `Kalan pozisyon: ${tracker.remainingSize} hisse (${tracker.marketSlug})`);
+        }
+
+        recordTrade(pnl, 'smartMoney');
+      } else {
+        log('EXIT', `Satis basarisiz: ${result.errorMsg} (${tracker.marketSlug})`);
+      }
+    } finally {
+      pendingTrade = false;
+    }
+  } catch (err) {
+    log('EXIT', `Cikis hatasi (${tracker.marketSlug}): ${(err as Error).message}`);
+  }
+}
 
 
 async function setupArbitrage(_sdk: PolymarketSDK) {
@@ -1036,12 +1359,18 @@ async function setupDirectTrading(sdk: PolymarketSDK) {
   setTimeout(checkTrendTrades, 10000);
 }
 
+// ponytail: Polymarket positions live on the proxy wallet (FUNDER_ADDRESS),
+// not the raw private key address. Use FUNDER_ADDRESS for position fetches.
+const PROXY_WALLET = (process.env.FUNDER_ADDRESS || '').toLowerCase();
+
 async function setupPortfolioManager(sdk: PolymarketSDK) {
+  const walletAddr = PROXY_WALLET || sdk.tradingService.getAddress();
   log('INFO', 'Starting Portfolio Manager...');
+  log('WALLET', `Fetching positions for: ${walletAddr}`);
 
   // Initial Sync
   try {
-    const positions = await sdk.wallets.getWalletPositions(sdk.tradingService.getAddress());
+    const positions = await sdk.wallets.getWalletPositions(walletAddr);
     state.positions = positions;
     log('WALLET', `Synced ${positions.length} existing positions.`);
     updateDashboard();
@@ -1052,7 +1381,7 @@ async function setupPortfolioManager(sdk: PolymarketSDK) {
   // Periodic Position Sync (Every 30s)
   setInterval(async () => {
     try {
-      const positions = await sdk.wallets.getWalletPositions(sdk.tradingService.getAddress());
+      const positions = await sdk.wallets.getWalletPositions(walletAddr);
 
       // Enrich positions with market data (to check if won or lost)
       const enrichedPositions = await Promise.all(positions.map(async (pos: any) => {
@@ -1151,6 +1480,7 @@ async function main() {
     binance: {
       enabled: CONFIG.binance.enabled,
     },
+    earlyExit: CONFIG.earlyExit,
     dryRun: CONFIG.dryRun,
   };
   dashboardEmitter.updateConfig(dashboardConfig);
@@ -1209,6 +1539,7 @@ async function main() {
           dipArb: { ...CONFIG.dipArb },
           directTrading: { ...CONFIG.directTrading },
           binance: { ...CONFIG.binance },
+          earlyExit: CONFIG.earlyExit,
           dryRun: CONFIG.dryRun,
         };
         dashboardEmitter.updateConfig(newDashboardConfig);
@@ -1233,6 +1564,8 @@ async function main() {
 
   const sdk = await PolymarketSDK.create({
     privateKey: process.env.POLYMARKET_PRIVATE_KEY,
+    funderAddress: process.env.FUNDER_ADDRESS,
+    signatureType: parseInt(process.env.SIGNATURE_TYPE || '3'),
   });
 
   log('INFO', `Wallet: ${sdk.tradingService.getAddress()}`);
@@ -1246,6 +1579,7 @@ async function main() {
   await setupSwap();
   await setupBinanceAnalysis(sdk);
   await setupSmartMoney(sdk);
+  await setupEarlyExitMonitor(sdk);
   await setupArbitrage(sdk);
   await setupDipArb(sdk);
 
@@ -1428,6 +1762,7 @@ async function main() {
           binance: {
             enabled: CONFIG.binance.enabled,
           },
+          earlyExit: CONFIG.earlyExit,
           dryRun: CONFIG.dryRun,
         };
         dashboardEmitter.updateConfig(dashboardConfig);

@@ -529,7 +529,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       { topic: 'clob_user', type: '*', clob_auth: credentials },
     ];
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);
 
     const orderHandler = (order: UserOrder) => handlers.onOrder?.(order);
     const tradeHandler = (trade: UserTrade) => handlers.onTrade?.(trade);
@@ -546,6 +548,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('userTrade', tradeHandler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);
       },
     };
 
@@ -586,7 +589,9 @@ export class RealtimeServiceV2 extends EventEmitter {
           { topic: 'activity', type: 'orders_matched' },
         ];
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);
 
     const handler = (trade: ActivityTrade) => handlers.onTrade?.(trade);
     this.on('activityTrade', handler);
@@ -599,6 +604,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('activityTrade', handler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);
       },
     };
 
@@ -634,7 +640,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       filters: JSON.stringify({ symbol }),
     }));
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);
 
     const handler = (price: CryptoPrice) => {
       if (symbols.includes(price.symbol)) {
@@ -651,6 +659,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('cryptoPrice', handler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);
       },
     };
 
@@ -716,7 +725,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       filters: JSON.stringify({ symbol }),
     }));
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);
 
     const handler = (price: EquityPrice) => {
       if (symbols.includes(price.symbol)) {
@@ -733,6 +744,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('equityPrice', handler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);
       },
     };
 
@@ -767,7 +779,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       { topic: 'comments', type: 'reaction_removed', filters: filterStr },
     ];
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);
 
     const commentHandler = (comment: Comment) => handlers.onComment?.(comment);
     const reactionHandler = (reaction: Reaction) => handlers.onReaction?.(reaction);
@@ -784,6 +798,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('reaction', reactionHandler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);
       },
     };
 
@@ -815,7 +830,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       { topic: 'rfq', type: 'quote_expired' },
     ];
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);
 
     const requestHandler = (request: RFQRequest) => handlers.onRequest?.(request);
     const quoteHandler = (quote: RFQQuote) => handlers.onQuote?.(quote);
@@ -832,6 +849,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('rfqQuote', quoteHandler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);
       },
     };
 

@@ -34,6 +34,24 @@ import {
   type SmartMoneyLeaderboardEntry,
   type BinanceKLine,
 } from './src/index.js';
+import { Telegraf } from 'telegraf';
+
+// ============================================================================
+// TELEGRAM NOTIFICATION SYSTEM
+// ============================================================================
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
+const telegramBot = TELEGRAM_BOT_TOKEN ? new Telegraf(TELEGRAM_BOT_TOKEN) : null;
+
+async function sendTelegram(message: string) {
+  if (!telegramBot || !TELEGRAM_CHAT_ID) return;
+  try {
+    await telegramBot.telegram.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error(`Telegram error: ${(err as Error).message}`);
+  }
+}
 
 // ============================================================================
 // CONFIGURATION
@@ -45,63 +63,59 @@ const CONFIG = {
     maxPerTradePct: 0.02,  // Reduced from 3% to 2% for safety
     maxPerMarketPct: 0.10,
     maxTotalExposurePct: 0.30,
-    minOrderUsd: 5,
+    minOrderUsd: 1,
     strategyAllocation: {
-      smartMoney: 0.60,
-      arbitrage: 0.20,
-      dipArb: 0.10,
-      directTrades: 0.10,
+      smartMoney: 1.00,  // 🔴 %100 Smart Money
+      arbitrage: 0.00,
+      dipArb: 0.00,
+      directTrades: 0.00,
     },
   },
 
   risk: {
-    // Daily limits
-    dailyMaxLossPct: 0.05,  // Reduced from 8% to 5%
-    maxConsecutiveLosses: 6,
-    pauseOnBreachMinutes: 60,
+    // 🔴 AGGRESSIVE RISK SETTINGS
+    dailyMaxLossPct: 0.08,  // Günlük %8 zarar limiti
+    maxConsecutiveLosses: 10,
+    pauseOnBreachMinutes: 30,
 
-    // 🔴 NEW: Monthly and cumulative limits
-    monthlyMaxLossPct: 0.15,  // 15% monthly limit
-    maxDrawdownFromPeak: 0.25,  // 25% drawdown from peak
-    totalMaxLossPct: 0.40,  // 40% total loss - stop trading entirely
+    // Aylık ve kümülatif limitler
+    monthlyMaxLossPct: 0.20,  // Aylık %20 zarar limiti
+    maxDrawdownFromPeak: 0.30,  // Zirveden %30 drawdown
+    totalMaxLossPct: 0.50,  // Toplam %50 zarar = kalıcı durma
 
-    // 🔴 NEW: Dynamic position sizing
+    // Dinamik pozisyon boyutlandırma
     enableDynamicSizing: true,
-    minPositionPct: 0.01,  // 1% minimum
-    maxPositionPct: 0.05,  // 5% maximum
-    lossSizingReduction: 0.20,  // Reduce 20% per consecutive loss
-    winSizingIncrease: 0.10,  // Increase 10% per consecutive win
+    minPositionPct: 0.02,  // %2 minimum
+    maxPositionPct: 0.10,  // %10 maksimum (daha agresif)
+    lossSizingReduction: 0.15,  // Kayıpta %15 azaltma
+    winSizingIncrease: 0.15,  // Kazançta %15 artırma
   },
 
   smartMoney: {
     enabled: true,
-    topN: 20,
-    // 🔴 FIXED: Stricter criteria
-    minWinRate: 0.60,  // Up from 0.50 to 60%
-    minPnl: 500,       // Up from 100 to $500
-    minTrades: 30,     // Up from 20 to 30
+    topN: 0,  // Sadece custom wallet'ları takip et, leaderboard tarama
+    // Filtreler devre dışı - sadece belirtilen cüzdanı takip et
+    minWinRate: 0.0,
+    minPnl: 0,
+    minTrades: 0,
+    minProfitFactor: 0,
+    minConsistencyScore: 0,
+    maxSingleTradeExposure: 1.0,
+    checkLastNTrades: 5,
 
-    // 🔴 NEW: Quality filters
-    minProfitFactor: 1.5,  // Total wins / total losses >= 1.5x
-    minConsistencyScore: 0.7,  // Recent performance score
-    maxSingleTradeExposure: 0.3,  // Max 30% of PnL from one trade
-    checkLastNTrades: 10,  // Analyze last 10 trades for consistency
-
-    sizeScale: 0.1,
-    maxSizePerTrade: 15,
-    maxSlippage: 0.03,
-    minTradeSize: 10,
-    delay: 500,
-    // ADD YOUR CUSTOM WALLETS HERE (will be followed in addition to leaderboard)
+    sizeScale: 1.0,  // Hedefin yaptığı işlemin aynısını yap (scale 1:1)
+    maxSizePerTrade: 5,  // 🔴 MAKSIMUM $5 per trade!
+    maxSlippage: 0.05,
+    minTradeSize: 0.5,
+    delay: 100,  // Mümkün olduğunca hızlı kopyalamak için düşük gecikme
+    // 🔴 TAKIP EDILECEK TEK CÜZDAN:
     customWallets: [
-      '0xc2e7800b5af46e6093872b177b7a5e7f0563be51',  // Top Polymarket trader
-      '0x58c3f5d66c95d4c41b093fbdd2520e46b6c9de74',  // simonbanza
-      // Add more wallet addresses here...
+      '0x6ff2cb14da8be7eb57541d250a0196c5f295f140',  // Avrupa sicaklik trader
     ] as string[],
   },
 
   arbitrage: {
-    enabled: true,
+    enabled: false,  // 🔴 DEVRE DIŞI - Sadece Smart Money kullaniliyor
     // 🔴 FIXED: Higher profit threshold to account for gas fees
     profitThreshold: 0.01,  // Up from 0.5% to 1%
     minTradeSize: 20,  // Up from 5 to reduce gas impact
@@ -116,7 +130,7 @@ const CONFIG = {
   },
 
   dipArb: {
-    enabled: true,
+    enabled: false,  // 🔴 DEVRE DIŞI - Sadece Smart Money kullaniliyor
     coins: ['BTC', 'ETH', 'SOL'] as const,
     shares: 10,
     sumTarget: 0.92,
@@ -126,20 +140,20 @@ const CONFIG = {
   },
 
   onchain: {
-    enabled: true,
+    enabled: false,  // 🔴 DEVRE DIŞI - Sadece copy trading yapiliyor
     autoApprove: true,
     minMatic: 0.5,
   },
 
   binance: {
-    enabled: true,
+    enabled: false,  // 🔴 DEVRE DIŞI - Trend analizi gerekmiyor
     symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'] as const,
     interval: '15m' as const,
     trendThreshold: 2,
   },
 
   directTrading: {
-    enabled: true,
+    enabled: false,  // 🔴 DEVRE DIŞI - Sadece Smart Money kullaniliyor
     trendFollowing: true,
     minTrendStrength: 0.02,
     // 🔴 NEW: Stop-loss and take-profit
@@ -275,9 +289,10 @@ function canTrade(): boolean {
     state.lastDailyReset = Date.now();
   }
 
-  // Reset monthly PnL if new month
-  const daysSinceMonthStart = (Date.now() - state.monthStartTime) / (1000 * 60 * 60 * 24);
-  if (daysSinceMonthStart >= 30) {
+  // Reset monthly PnL if new calendar month
+  const now = new Date();
+  const lastReset = new Date(state.monthStartTime);
+  if (now.getMonth() !== lastReset.getMonth() || now.getFullYear() !== lastReset.getFullYear()) {
     log('INFO', `Monthly PnL reset. Previous month: $${state.monthlyPnL.toFixed(2)}`);
     state.monthlyPnL = 0;
     state.monthStartTime = Date.now();
@@ -407,7 +422,8 @@ async function setupSmartMoney(sdk: PolymarketSDK) {
     }
   }
 
-  // 2. Add wallets from leaderboard (with STRICT filtering)
+  // 2. Add wallets from leaderboard (sadece topN > 0 ise)
+  if (CONFIG.smartMoney.topN > 0) {
   const leaderboard = await sdk.smartMoney.getLeaderboard({ limit: CONFIG.smartMoney.topN * 2 });
 
   for (const entry of leaderboard.entries) {
@@ -467,6 +483,7 @@ async function setupSmartMoney(sdk: PolymarketSDK) {
       await new Promise(r => setTimeout(r, 200));
     } catch { /* skip */ }
   }
+  } // topN > 0 check
 
   if (qualified.length === 0) {
     log('WARN', 'No qualified wallets');
@@ -485,13 +502,25 @@ async function setupSmartMoney(sdk: PolymarketSDK) {
       minTradeSize: CONFIG.smartMoney.minTradeSize,
       delay: CONFIG.smartMoney.delay,
       dryRun: false,
+      marketFilter: /(temp|weather|hava|sicaklik|sogukluk|degree|celsius|fahrenhe)/i,
       onTrade: (trade, result) => {
+        const tradeValue = trade.size * trade.price;
         if (result.success) {
           log('TRADE', `Copied ${trade.side} from ${trade.traderAddress.slice(0, 8)}...`);
-          recordTrade(0, 'smartMoney');
+          recordTrade(trade.side === 'SELL' ? tradeValue : -tradeValue, 'smartMoney');
+          // 📱 Telegram bildirimi - BUY ve SELL ikisi için de
+          const icon = trade.side === 'BUY' ? '🟢' : '🔴';
+          const yon = trade.side === 'BUY' ? 'ALIM' : 'SATIM';
+          sendTelegram(`${icon} <b>İşlem Kopyalandı!</b>\n\n🎯 <b>Yön:</b> ${yon} (${trade.side})\n📊 <b>Market:</b> ${trade.marketSlug || trade.outcome || 'N/A'}\n💵 <b>Tutar:</b> $${tradeValue.toFixed(2)}\n👛 <b>Kaynak:</b> ${trade.traderAddress.slice(0, 10)}...\n⏰ <b>Zaman:</b> ${new Date().toLocaleString('tr-TR')}`);
+        } else {
+          log('ERROR', `Trade failed: ${trade.side} from ${trade.traderAddress.slice(0, 8)}...`);
+          sendTelegram(`❌ <b>İşlem Başarısız!</b>\n\n🎯 <b>Yön:</b> ${trade.side}\n📊 <b>Market:</b> ${trade.marketSlug || trade.outcome || 'N/A'}\n⚠️ <b>Hata:</b> ${result.errorMsg || 'Bilinmeyen hata'}`);
         }
       },
-      onError: (err) => log('ERROR', `Copy error: ${err.message}`),
+      onError: (err) => {
+        log('ERROR', `Copy error: ${err.message}`);
+        sendTelegram(`❌ <b>Kopyalama Hatası!</b>\n${err.message}`);
+      },
     });
   }
 }
@@ -914,6 +943,7 @@ async function main() {
 
   process.on('SIGINT', async () => {
     console.log('\n\nShutting down...');
+    await sendTelegram(`🛑 <b>Bot Kapatıldı</b>\n\n⏰ <b>Zaman:</b> ${new Date().toLocaleString('tr-TR')}\n💰 <b>Toplam PnL:</b> $${state.totalPnL >= 0 ? '+' : ''}${state.totalPnL.toFixed(2)}\n📊 <b>Toplam İşlem:</b> ${state.tradesExecuted}`);
     if (arbService) await arbService.stop();
     await sdk.dipArb.stop();
     displayStatus();
@@ -922,6 +952,18 @@ async function main() {
   });
 
   log('INFO', '🚀 Bot v3.0 running! Press Ctrl+C to stop.\n');
+
+  // 📱 Telegram başlangıç kontrolü
+  if (TELEGRAM_BOT_TOKEN && !TELEGRAM_CHAT_ID) {
+    log('WARN', 'Telegram configured but TELEGRAM_CHAT_ID is missing!');
+  } else if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+    log('INFO', '📱 Telegram notifications enabled');
+  } else {
+    log('INFO', '📱 Telegram notifications disabled (no token configured)');
+  }
+
+  // 📱 Telegram'a başlangıç bildirimi gönder
+  await sendTelegram(`🤖 <b>Polymarket Bot Başlatıldı!</b>\n\n📊 <b>Mod:</b> ${CONFIG.dryRun ? '🧪 DRY RUN' : '🔴 CANLI İŞLEM'}\n💰 <b>Sermaye:</b> $${CONFIG.capital.totalUsd}\n🎯 <b>Strateji:</b> Smart Money (Copy Trading)\n👛 <b>Takip:</b> ${CONFIG.smartMoney.customWallets.length} cüzdan\n💵 <b>Max İşlem:</b> $${CONFIG.smartMoney.maxSizePerTrade}\n⏰ <b>Başlangıç:</b> ${new Date().toLocaleString('tr-TR')}`);
 }
 
 main().catch((err) => {

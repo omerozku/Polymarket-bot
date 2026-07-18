@@ -149,6 +149,8 @@ export interface AutoCopyTradingOptions {
   minTradeSize?: number;
   /** Only copy BUY or SELL trades */
   sideFilter?: 'BUY' | 'SELL';
+  /** Only copy trades matching this regex in marketSlug */
+  marketFilter?: RegExp;
 
   /** Dry run mode */
   dryRun?: boolean;
@@ -949,6 +951,7 @@ export class SmartMoneyService {
     const orderType = options.orderType ?? 'FOK';
     const minTradeSize = options.minTradeSize ?? 10;
     const sideFilter = options.sideFilter;
+    const marketFilter = options.marketFilter;
     const delay = options.delay ?? 0;
     const dryRun = options.dryRun ?? false;
 
@@ -971,6 +974,12 @@ export class SmartMoneyService {
           }
 
           if (sideFilter && trade.side !== sideFilter) {
+            stats.tradesSkipped++;
+            return;
+          }
+
+          // Market filter
+          if (marketFilter && trade.marketSlug && !marketFilter.test(trade.marketSlug)) {
             stats.tradesSkipped++;
             return;
           }

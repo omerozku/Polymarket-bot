@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: polymarket-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build && cd dashboard && npm install && npm run build && cd ..
+    startCommand: node start.cjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: POLYMARKET_PRIVATE_KEY
+        sync: false
+      - key: CAPITAL_USD
+        value: "46"
+      - key: DRY_RUN
+        value: "false"
+      - key: ARBITRAGE_ENABLED
+        value: "false"
+      - key: DIPARB_ENABLED
+        value: "false"
+      - key: SMARTMONEY_ENABLED
+        value: "true"
+      - key: TREND_ANALYSIS_ENABLED
+        value: "false"
+      - key: DAILY_MAX_LOSS_PCT
+        value: "0.08"
+      - key: MONTHLY_MAX_LOSS_PCT
+        value: "0.20"
+      - key: MAX_DRAWDOWN_PCT
+        value: "0.30"
+      - key: TOTAL_MAX_LOSS_PCT
+        value: "0.50"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        value: "6220413461"
+      - key: RELAYER_API_KEY
+        sync: false
+      - key: RELAYER_API_KEY_ADDRESS
+        value: "0xa70Eec76775E1533E7DFb5e060b22D2545dd8a0F"
+      - key: FUNDER_ADDRESS
+        value: "0xA00eed21f51b2f01E7be6b06e871143BA4B87B09"
+      - key: SIGNATURE_TYPE
+        value: "3"
+    healthCheckPath: /
+    autoDeploy: true

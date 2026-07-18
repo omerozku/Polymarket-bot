@@ -1,28 +1,26 @@
 /**
  * TradingService
  *
- * Trading service using official @polymarket/clob-client.
+ * Trading service using official @polymarket/clob-client-v2.
  *
  * Provides:
  * - Order creation (limit, market)
  * - Order management (cancel, query)
  * - Rewards tracking
  * - Balance management
- *
- * Note: Market data methods have been moved to MarketService.
  */
 
 import {
   ClobClient,
   Side as ClobSide,
   OrderType as ClobOrderType,
-  Chain,
   type OpenOrder,
   type Trade as ClobTrade,
-  type TickSize,
-} from '@polymarket/clob-client';
+} from '@polymarket/clob-client-v2';
 
-import { Wallet } from 'ethers';
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { polygon } from 'viem/chains';
 import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
@@ -74,6 +72,10 @@ export interface TradingServiceConfig {
   chainId?: number;
   /** Pre-generated API credentials (optional) */
   credentials?: ApiCredentials;
+  /** Deposit wallet (funder) address for Polymarket */
+  funderAddress?: string;
+  /** Signature type: 0=EOA, 1=Proxy, 2=Gnosis Safe, 3=Deposit wallet */
+  signatureType?: number;
 }
 
 // Order types
@@ -158,21 +160,32 @@ export interface MarketReward {
 
 export class TradingService {
   private clobClient: ClobClient | null = null;
-  private wallet: Wallet;
-  private chainId: Chain;
+  private viemAccount: ReturnType<typeof privateKeyToAccount>;
+  private viemSigner: ReturnType<typeof createWalletClient>;
+  private chainId: number;
   private credentials: ApiCredentials | null = null;
   private initialized = false;
   private tickSizeCache: Map<string, string> = new Map();
   private negRiskCache: Map<string, boolean> = new Map();
+  private funderAddress: string;
+  private signatureType: number;
 
   constructor(
     private rateLimiter: RateLimiter,
     private cache: UnifiedCache,
     private config: TradingServiceConfig
   ) {
-    this.wallet = new Wallet(config.privateKey);
-    this.chainId = (config.chainId || POLYGON_MAINNET) as Chain;
+    this.viemAccount = privateKeyToAccount(config.privateKey as `0x${string}`);
+    this.chainId = config.chainId || POLYGON_MAINNET;
     this.credentials = config.credentials || null;
+    this.funderAddress = config.funderAddress || this.viemAccount.address;
+    this.signatureType = config.signatureType ?? 3;
+
+    this.viemSigner = createWalletClient({
+      account: this.viemAccount,
+      chain: polygon,
+      transport: http(),
+    });
   }
 
   // ============================================================================
@@ -182,14 +195,16 @@ export class TradingService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Create CLOB client with L1 auth (wallet)
-    this.clobClient = new ClobClient(CLOB_HOST, this.chainId, this.wallet);
+    // Create bootstrap client for API key derivation
+    const bootstrap = new ClobClient({
+      host: CLOB_HOST,
+      chain: this.chainId,
+      signer: this.viemSigner,
+    });
 
-    // Get or create API credentials
-    // We use derive-first strategy (opposite of official createOrDeriveApiKey)
-    // because most users already have a key, avoiding unnecessary 400 error logs.
+    // Derive or create API credentials
     if (!this.credentials) {
-      const creds = await this.deriveOrCreateApiKey();
+      const creds = await bootstrap.createOrDeriveApiKey();
       this.credentials = {
         key: creds.key,
         secret: creds.secret,
@@ -197,42 +212,21 @@ export class TradingService {
       };
     }
 
-    // Re-initialize with L2 auth (credentials)
-    this.clobClient = new ClobClient(
-      CLOB_HOST,
-      this.chainId,
-      this.wallet,
-      {
+    // Create full client with L2 auth + deposit wallet
+    this.clobClient = new ClobClient({
+      host: CLOB_HOST,
+      chain: this.chainId,
+      signer: this.viemSigner,
+      creds: {
         key: this.credentials.key,
         secret: this.credentials.secret,
         passphrase: this.credentials.passphrase,
-      }
-    );
+      },
+      signatureType: this.signatureType,
+      funderAddress: this.funderAddress,
+    });
 
     this.initialized = true;
-  }
-
-  /**
-   * Try to derive existing API key first, create new one if not exists.
-   * This is the reverse of official createOrDeriveApiKey() to avoid
-   * 400 "Could not create api key" error log for existing keys.
-   */
-  private async deriveOrCreateApiKey(): Promise<{ key: string; secret: string; passphrase: string }> {
-    // First try to derive existing key (most common case for existing users)
-    const derived = await this.clobClient!.deriveApiKey();
-    if (derived.key) {
-      return derived;
-    }
-
-    // Derive failed (key doesn't exist), create new key (first-time users)
-    const created = await this.clobClient!.createApiKey();
-    if (!created.key) {
-      throw new PolymarketError(
-        ErrorCode.AUTH_FAILED,
-        'Failed to create or derive API key. Wallet may not be registered on Polymarket.'
-      );
-    }
-    return created;
   }
 
   private async ensureInitialized(): Promise<ClobClient> {
@@ -246,28 +240,20 @@ export class TradingService {
   // Trading Helpers
   // ============================================================================
 
-  /**
-   * Get tick size for a token
-   */
-  async getTickSize(tokenId: string): Promise<TickSize> {
+  async getTickSize(tokenId: string): Promise<string> {
     if (this.tickSizeCache.has(tokenId)) {
-      return this.tickSizeCache.get(tokenId)! as TickSize;
+      return this.tickSizeCache.get(tokenId)!;
     }
-
     const client = await this.ensureInitialized();
     const tickSize = await client.getTickSize(tokenId);
     this.tickSizeCache.set(tokenId, tickSize);
     return tickSize;
   }
 
-  /**
-   * Check if token is neg risk
-   */
   async isNegRisk(tokenId: string): Promise<boolean> {
     if (this.negRiskCache.has(tokenId)) {
       return this.negRiskCache.get(tokenId)!;
     }
-
     const client = await this.ensureInitialized();
     const negRisk = await client.getNegRisk(tokenId);
     this.negRiskCache.set(tokenId, negRisk);
@@ -321,22 +307,24 @@ export class TradingService {
             side: params.side === 'BUY' ? ClobSide.BUY : ClobSide.SELL,
             price: params.price,
             size: params.size,
-            expiration: params.expiration || 0,
           },
-          { tickSize, negRisk },
+          { tickSize: tickSize as any, negRisk },
           orderType
         );
 
         const success = result.success === true ||
-          (result.success !== false &&
-            ((result.orderID !== undefined && result.orderID !== '') ||
-              (result.transactionsHashes !== undefined && result.transactionsHashes.length > 0)));
+          (result.orderID !== undefined && result.orderID !== '') ||
+          (result.transactionsHashes !== undefined && result.transactionsHashes.length > 0);
+
+        const errorMsg = result.errorMsg
+          || (result as any).error
+          || (!success ? `Order rejected: ${JSON.stringify(result)}` : undefined);
 
         return {
           success,
           orderId: result.orderID,
           orderIds: result.orderIDs,
-          errorMsg: result.errorMsg,
+          errorMsg,
           transactionHashes: result.transactionsHashes,
         };
       } catch (error) {
@@ -383,7 +371,7 @@ export class TradingService {
             amount: params.amount,
             price: params.price,
           },
-          { tickSize, negRisk },
+          { tickSize: tickSize as any, negRisk },
           orderType
         );
 
@@ -392,11 +380,17 @@ export class TradingService {
             ((result.orderID !== undefined && result.orderID !== '') ||
               (result.transactionsHashes !== undefined && result.transactionsHashes.length > 0)));
 
+        // Hata mesajını her kaynaktan topla
+        const errorMsg = result.errorMsg
+          || (result as any).error
+          || (result as any).errorMsg
+          || (!success ? `Order rejected: ${JSON.stringify(result)}` : undefined);
+
         return {
           success,
           orderId: result.orderID,
           orderIds: result.orderIDs,
-          errorMsg: result.errorMsg,
+          errorMsg,
           transactionHashes: result.transactionsHashes,
         };
       } catch (error) {
@@ -578,7 +572,7 @@ export class TradingService {
         asset_type: assetType as any,
         token_id: tokenId,
       });
-      return { balance: result.balance, allowance: result.allowance };
+      return { balance: result.balance, allowance: Object.values(result.allowances || {}).join(',') };
     });
   }
 
@@ -600,11 +594,11 @@ export class TradingService {
   // ============================================================================
 
   getAddress(): string {
-    return this.wallet.address;
+    return this.viemAccount.address;
   }
 
-  getWallet(): Wallet {
-    return this.wallet;
+  getWallet(): ReturnType<typeof privateKeyToAccount> {
+    return this.viemAccount;
   }
 
   getCredentials(): ApiCredentials | null {

@@ -77,6 +77,16 @@ export interface BotState {
   // Smart Money signals
   smartMoneySignals: SmartMoneySignal[];
 
+  // Early exit tracker - kopyalanan pozisyonlar icin cikis takibi
+  earlyExitTracker: Map<string, {
+    entryPrice: number;
+    entrySize: number;
+    remainingSize: number;
+    firstSellDone: boolean;
+    marketSlug: string;
+    entryTime: number;
+  }>;
+
   // Paper Trading (Dry Run)
   paper?: {
     balance: number;
@@ -155,6 +165,13 @@ export interface BotConfig {
   binance: {
     enabled: boolean;
   };
+  earlyExit: {
+    enabled: boolean;
+    profitTarget1: number;
+    profitTarget2: number;
+    sellAtTarget1: number;
+    checkIntervalMs: number;
+  };
   dryRun: boolean;
 }
 
@@ -170,7 +187,8 @@ export type LogLevel =
   | 'SWAP'
   | 'BRIDGE'
   | 'KLINE'
-  | 'TREND';
+  | 'TREND'
+  | 'EXIT';
 
 export interface LogEntry {
   id: string;

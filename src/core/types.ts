@@ -119,6 +119,16 @@ export interface PolySDKOptions {
     secret: string;
     passphrase: string;
   };
+
+  /**
+   * Deposit wallet (funder) address for Polymarket
+   */
+  funderAddress?: string;
+
+  /**
+   * Signature type: 0=EOA, 1=Proxy, 2=Gnosis Safe, 3=Deposit wallet (default: 3)
+   */
+  signatureType?: number;
 }
 
 // K-Line interval types
