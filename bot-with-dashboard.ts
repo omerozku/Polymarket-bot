@@ -735,11 +735,13 @@ async function initializeSmartMoney(sdk: PolymarketSDK) {
             } else {
               const errMsg = result.errorMsg || 'Bilinmeyen hata';
               log('ERROR', `Order failed: ${errMsg}`);
-              sendTelegram(`❌ <b>İŞLEM BAŞARISIZ</b>\n\nMarket: ${trade.marketSlug}\nHata: ${errMsg}`);
+              // ponytail: telegram trade-error notification disabled
+              // sendTelegram(`❌ <b>İŞLEM BAŞARISIZ</b>\n\nMarket: ${trade.marketSlug}\nHata: ${errMsg}`);
             }
           } catch (err) {
             log('ERROR', `Trade execution error: ${(err as Error).message}`);
-            sendTelegram(`❌ <b>İŞLEM HATASI</b>\n\n${(err as Error).message}`);
+            // ponytail: telegram trade-error notification disabled
+            // sendTelegram(`❌ <b>İŞLEM HATASI</b>\n\n${(err as Error).message}`);
           } finally {
             pendingTrade = false;
           }
@@ -889,7 +891,8 @@ async function executeEarlyExit(
         const pnl = (currentPrice - tracker.entryPrice) * sellSize;
         const pnlEmoji = pnl >= 0 ? '✅' : '❌';
         log('EXIT', `${pnlEmoji} ERKEN CIKIS: ${sellSize} hisse @ $${currentPrice.toFixed(3)} | K/Z: $${pnl.toFixed(2)} | ${tracker.marketSlug}`);
-        sendTelegram(`${pnlEmoji} <b>ERKEN ÇIKIŞ</b>\n\n📊 Market: ${tracker.marketSlug}\n💰 Hisse: ${sellSize}\n💲 Fiyat: $${currentPrice.toFixed(3)}\n📈 Giriş: $${tracker.entryPrice.toFixed(3)}\n💵 K/Z: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
+        // ponytail: telegram early-exit notification disabled
+        // sendTelegram(`${pnlEmoji} <b>ERKEN ÇIKIŞ</b>\n\n📊 Market: ${tracker.marketSlug}\n💰 Hisse: ${sellSize}\n💲 Fiyat: $${currentPrice.toFixed(3)}\n📈 Giriş: $${tracker.entryPrice.toFixed(3)}\n💵 K/Z: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
 
         tracker.remainingSize -= sellSize;
         if (tracker.remainingSize <= 0) {
